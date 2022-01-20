@@ -23,13 +23,15 @@ const formatKeyValuesExpression = attributes =>
     return `${k} = :${letter}${k.split(`#${letter}`)[1]}`
   }).join(' and ')
 
-const formatParams = (tableName, indexName, keyValues, objectValues) => 
+const formatParams = (tableName, indexName, keyValues, limit, lastKey, objectValues) => 
     Promise.all([
       formatAttributes(keyValues), 
       formatAttributes(objectValues, 'f')
     ]).then(([keyAttrs, valueAttrs]) => ({
         TableName: tableName,
         ...(indexName? {IndexName: indexName}: {}),
+        ...(limit? {Limit: limit}: {}),
+        ...(lastKey? {ExclusiveStartKey: lastKey}: {}),
         ExpressionAttributeNames: {...keyAttrs, ...valueAttrs},
         ExpressionAttributeValues: formatValues({...keyValues, ...objectValues}, {...keyAttrs, ...valueAttrs}),
         KeyConditionExpression: formatKeyValuesExpression(keyAttrs),
@@ -95,12 +97,20 @@ export const putItem = (tableName, partitionKeyValue, sortKeyValue, objectValues
     return dynamoDb.put(params).promise()
   })
 
-export const getItems = (tableName, indexName, partitionKeyValue, sortKeyValue = null, objectValues = {}, partitionKeyName = "PK", sortKeyName = "SK") =>
+export const getItems = (tableName, indexName, 
+  partitionKeyValue, sortKeyValue = null, 
+  limit = null, 
+  lastKey = null,
+  objectValues = {}, 
+  partitionKeyName = "PK", sortKeyName = "SK"
+) =>
   formatParams(tableName, indexName, 
     {
       [partitionKeyName]: partitionKeyValue, 
       ...(sortKeyValue? {[sortKeyName]: sortKeyValue}: {})
     }, 
+    limit,     
+    lastKey,
     objectValues
   )
   .then(async params => {
@@ -109,11 +119,10 @@ export const getItems = (tableName, indexName, partitionKeyValue, sortKeyValue =
         console.log(`About to query items:`, params)
         data = await dynamoDb.query(params).promise()
         items = [...items, ...data.Items]
-        if(data.Items) 
-            console.log("Items loaded:" + data.Items.length)
+        console.log("Items loaded:" + data.Count)
         params.ExclusiveStartKey = data.LastEvaluatedKey 
-    }while(data.LastEvaluatedKey)
-    return items
+    }while(data.LastEvaluatedKey && (!limit || (limit && items.length < limit)))
+    return {items, lastKey: data.LastEvaluatedKey}
   })
 
   
